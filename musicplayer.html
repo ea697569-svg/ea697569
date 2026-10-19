@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OURS / Music</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #121212; color: #fff; font-family: 'Segoe UI', Arial, sans-serif; min-height: 100vh; }
+  header { background: #000; padding: 14px 20px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  header h1 { font-size: 18px; color: #00ccff; white-space: nowrap; }
+  .search-box { flex: 1; display: flex; gap: 8px; min-width: 220px; }
+  .search-box input {
+    flex: 1; padding: 10px 14px; border-radius: 20px; border: none;
+    background: #2a2a2a; color: #fff; font-size: 14px; outline: none;
+  }
+  .search-box button {
+    padding: 10px 18px; border-radius: 20px; border: none;
+    background: #00ccff; color: #000; font-weight: bold; cursor: pointer;
+  }
+  .tabs { display: flex; gap: 8px; padding: 12px 20px 0; }
+  .tab {
+    padding: 8px 16px; border-radius: 16px; background: #2a2a2a; color: #aaa;
+    font-size: 13px; cursor: pointer; border: none;
+  }
+  .tab.active { background: #00ccff; color: #000; font-weight: bold; }
+  #results { padding: 12px 20px 160px; }
+  .track { display: flex; align-items: center; gap: 12px; padding: 10px; border-radius: 10px; cursor: pointer; }
+  .track:hover, .track.active { background: #1e1e1e; }
+  .track.active { outline: 1px solid #00ccff; }
+  .track img { width: 48px; height: 48px; border-radius: 6px; background: #333; }
+  .track .info { flex: 1; min-width: 0; }
+  .track .title { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .track .artist { font-size: 12px; color: #999; }
+  .track .playicon { font-size: 18px; color: #00ccff; }
+  .heart { background: none; border: none; font-size: 18px; cursor: pointer; padding: 4px; }
+  .heart.saved { color: #ff2d78; }
+  .heart:not(.saved) { color: #555; }
+
+  #player-bar {
+    position: fixed; bottom: 0; left: 0; right: 0; background: #000;
+    padding: 10px 16px; display: none; align-items: center; gap: 14px; border-top: 1px solid #222;
+  }
+  #player-bar.on { display: flex; }
+  #bar-img { width: 44px; height: 44px; border-radius: 6px; background: #333; }
+  #bar-info { flex: 1; min-width: 0; }
+  #bar-title { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #bar-artist { font-size: 11px; color: #999; }
+  #bar-controls { display: flex; align-items: center; gap: 10px; }
+  #bar-controls button { background: none; border: none; color: #fff; font-size: 18px; cursor: pointer; }
+  #bar-play { background: #00ccff; color: #000; width: 42px; height: 42px; border-radius: 50%; font-size: 18px; }
+  .mode-on { color: #00ccff !important; }
+  #bar-bottom { position: fixed; bottom: 0; left: 0; right: 0; padding: 0 16px 8px; background: #000; display: none; }
+  #bar-bottom.on { display: block; }
+  #bar-seek { width: 100%; accent-color: #00ccff; cursor: pointer; }
+  #bar-time { display: flex; justify-content: space-between; font-size: 11px; color: #888; padding: 2px 2px 0; }
+  #loading { text-align: center; color: #555; padding: 40px; }
+</style>
+<base target="_blank">
+</head>
+<body>
+
+<header>
+  <h1>🎵 OURS / Music</h1>
+  <div class="search-box">
+    <input type="text" id="search-input" placeholder="Search real songs, artists... (try: hip hop, lo-fi, pop)" onkeydown="if(event.key==='Enter')doSearch()">
+    <button onclick="doSearch()">Search</button>
+  </div>
+</header>
+
+<div class="tabs">
+  <button class="tab active" id="tab-search" onclick="showTab('search')">🔎 Search Results</button>
+  <button class="tab" id="tab-saved" onclick="showTab('saved')">❤️ Saved (<span id="saved-count">0</span>)</button>
+</div>
+
+<div id="results"><div id="loading">Type a search above and press Enter 👆</div></div>
+
+<audio id="audio" preload="none"></audio>
+
+<div id="bar-bottom">
+  <input type="range" id="bar-seek" value="0" min="0" max="1000">
+  <div id="bar-time"><span id="t-cur">0:00</span><span id="t-tot">0:00</span></div>
+</div>
+
+<div id="player-bar">
+  <img id="bar-img" alt="">
+  <div id="bar-info">
+    <div id="bar-title">—</div>
+    <div id="bar-artist">—</div>
+  </div>
+  <div id="bar-controls">
+    <button id="btn-shuffle" onclick="toggleShuffle()" title="Shuffle">🔀</button>
+    <button onclick="prevTrack()">⏮</button>
+    <button id="bar-play" onclick="togglePlay()">▶</button>
+    <button onclick="nextTrack()">⏭</button>
+    <button id="btn-repeat" onclick="cycleRepeat()" title="Repeat">🔁</button>
+  </div>
+</div>
+
+<script>
+const audio = document.getElementById('audio');
+const resultsEl = document.getElementById('results');
+let queue = [];       // what's showing now (search results OR saved list)
+let fullResults = []; // last search results
+let saved = JSON.parse(localStorage.getItem('savedTracks') || '[]');
+let current = -1;
+let host = '';
+let currentTab = 'search';
+let shuffle = false;
+let repeatMode = 0; // 0 = off, 1 = repeat all, 2 = repeat one
+
+// ---------- init ----------
+async function init() {
+  try {
+    const r = await fetch('https://api.audius.co');
+    const j = await r.json();
+    host = j.data;
+  } catch (e) {
+    resultsEl.innerHTML = '<div id="loading">⚠️ Could not reach music server. Check internet and refresh.</div>';
+  }
+  updateSavedCount();
+}
+init();
+
+// ---------- search ----------
+async function doSearch() {
+  const q = document.getElementById('search-input').value.trim();
+  if (!q || !host) return;
+  resultsEl.innerHTML = '<div id="loading">🔎 Searching...</div>';
+  try {
+    const r = await fetch(host + '/v1/tracks/search?query=' + encodeURIComponent(q) + '&limit=25&app_name=oursmusic');
+    const j = await r.json();
+    fullResults = j.data || [];
+    currentTab = 'search';
+    showTab('search', true);
+    queue = fullResults;
+    renderResults();
+  } catch (e) {
+    resultsEl.innerHTML = '<div id="loading">⚠️ Search failed — try again.</div>';
+  }
+}
+
+// ---------- tabs ----------
+function showTab(tab, skipRender) {
+  currentTab = tab;
+  document.getElementById('tab-search').classList.toggle('active', tab === 'search');
+  document.getElementById('tab-saved').classList.toggle('active', tab === 'saved');
+  queue = tab === 'saved' ? saved.slice() : fullResults;
+  if (!skipRender) renderResults();
+}
+
+// ---------- saved (localStorage) ----------
+function isSaved(id) { return saved.some(t => t.id === id); }
+
+function toggleSave(track, btn) {
+  if (isSaved(track.id)) {
+    saved = saved.filter(t => t.id !== track.id);
+  } else {
+    saved.push({
+      id: track.id,
+      title: track.title,
+      artist: track.user ? track.user.name : 'Unknown',
+      artwork: art(track)
+    });
+  }
+  localStorage.setItem('savedTracks', JSON.stringify(saved));
+  updateSavedCount();
+  renderResults();
+}
+
+function updateSavedCount() {
+  document.getElementById('saved-count').textContent = saved.length;
+}
+
+// ---------- render ----------
+function art(t) {
+  return (t.artwork && (t.artwork['150x150'] || t.artwork['480x480'])) || 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="150" height="150"><rect width="150" height="150" fill="%23333"/><text x="75" y="85" font-size="50" text-anchor="middle">🎵</text></svg>';
+}
+// saved items store artwork as plain string, normalize:
+function artOf(t) {
+  if (typeof t.artwork === 'string') return t.artwork;
+  return art(t);
+}
+
+function renderResults() {
+  if (!queue.length) {
+    resultsEl.innerHTML = '<div id="loading">' +
+      (currentTab === 'saved' ? 'No saved songs yet — tap ❤️ on any song to save it here.' : 'No results — try a different search.') +
+      '</div>';
+    return;
+  }
+  resultsEl.innerHTML = '';
+  queue.forEach((t, i) => {
+    const div = document.createElement('div');
+    div.className = 'track' + (i === current ? ' active' : '');
+    div.innerHTML =
+      '<img src="' + artOf(t) + '" loading="lazy" alt="">' +
+      '<div class="info"><div class="title">' + escapeHtml(t.title) + '</div>' +
+      '<div class="artist">' + escapeHtml(t.artist || (t.user ? t.user.name : 'Unknown')) + '</div></div>' +
+      '<button class="heart' + (isSaved(t.id) ? ' saved' : '') + '">' + (isSaved(t.id) ? '❤️' : '🤍') + '</button>' +
+      '<div class="playicon">' + (i === current && !audio.paused ? '⏸' : '▶') + '</div>';
+    div.onclick = (e) => {
+      if (e.target.classList.contains('heart')) { toggleSave(t, e.target); return; }
+      playTrack(i);
+    };
+    resultsEl.appendChild(div);
+  });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ---------- playback ----------
+function playTrack(i) {
+  current = i;
+  const t = queue[i];
+  audio.src = host + '/v1/tracks/' + t.id + '/stream?app_name=oursmusic';
+  audio.play().catch(() => {});
+  document.getElementById('player-bar').classList.add('on');
+  document.getElementById('bar-bottom').classList.add('on');
+  document.getElementById('bar-img').src = artOf(t);
+  document.getElementById('bar-title').textContent = t.title;
+  document.getElementById('bar-artist').textContent = t.artist || (t.user ? t.user.name : '');
+  document.getElementById('bar-play').textContent = '⏸';
+  renderResults();
+}
+
+function togglePlay() {
+  if (current === -1) { if (queue.length) playTrack(0); return; }
+  if (audio.paused) { audio.play(); document.getElementById('bar-play').textContent = '⏸'; }
+  else { audio.pause(); document.getElementById('bar-play').textContent = '▶'; }
+  renderResults();
+}
+
+function pickNext() {
+  if (shuffle && queue.length > 1) {
+    let n;
+    do { n = Math.floor(Math.random() * queue.length); } while (n === current);
+    return n;
+  }
+  return (current + 1) % queue.length;
+}
+
+function nextTrack(auto) {
+  if (!queue.length) return;
+  if (auto && repeatMode === 0 && current === queue.length - 1 && !shuffle) {
+    // reached the end, repeat off -> stop
+    audio.pause();
+    document.getElementById('bar-play').textContent = '▶';
+    renderResults();
+    return;
+  }
+  playTrack(pickNext());
+}
+
+function prevTrack() {
+  if (audio.currentTime > 3) { audio.currentTime = 0; return; }
+  if (queue.length) playTrack((current - 1 + queue.length) % queue.length);
+}
+
+function toggleShuffle() {
+  shuffle = !shuffle;
+  document.getElementById('btn-shuffle').classList.toggle('mode-on', shuffle);
+}
+
+function cycleRepeat() {
+  repeatMode = (repeatMode + 1) % 3; // 0->1->2->0
+  const b = document.getElementById('btn-repeat');
+  b.classList.toggle('mode-on', repeatMode > 0);
+  b.textContent = repeatMode === 2 ? '🔂' : '🔁';
+  b.title = ['Repeat: off', 'Repeat: all', 'Repeat: one'][repeatMode];
+}
+
+audio.addEventListener('ended', () => {
+  if (repeatMode === 2) { audio.currentTime = 0; audio.play(); return; } // repeat one
+  nextTrack(true);
+});
+
+audio.addEventListener('timeupdate', () => {
+  if (audio.duration) {
+    document.getElementById('bar-seek').value = (audio.currentTime / audio.duration) * 1000;
+    document.getElementById('t-cur').textContent = fmt(audio.currentTime);
+    document.getElementById('t-tot').textContent = fmt(audio.duration);
+  }
+});
+document.getElementById('bar-seek').addEventListener('input', e => {
+  if (audio.duration) audio.currentTime = (e.target.value / 1000) * audio.duration;
+});
+
+function fmt(sec) {
+  const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+  return m + ':' + (s < 10 ? '0' + s : s);
+}
+</script>
+
+</body>
+</html>
